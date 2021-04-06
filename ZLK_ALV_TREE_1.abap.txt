@@ -1,0 +1,287 @@
+*&---------------------------------------------------------------------*
+*& Report ZLK_RTTS
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT zlk_rtts.
+
+PARAMETERS p_table TYPE string DEFAULT 'MDG_BS_BP_S_EXTERN'.
+
+DATA ls_MDG_BS_BP_T_EXTERN TYPE mdg_bs_bp_s_extern.
+DATA descr_ref TYPE REF TO cl_abap_typedescr.
+TYPES: BEGIN OF ty_comp_detail,
+         name  TYPE abap_compname,
+         descr TYPE scrtext_m,
+       END OF ty_comp_detail.
+
+DATA: lo_struct_def  TYPE REF TO cl_abap_structdescr.
+DATA: lo_table_def   TYPE REF TO cl_abap_tabledescr.
+DATA: lo_data_def    TYPE REF TO cl_abap_datadescr.
+DATA: lo_element_def TYPE REF TO cl_abap_elemdescr.
+DATA: lt_components  TYPE abap_compdescr_tab.
+DATA: wa_components  LIKE LINE OF lt_components.
+DATA: lv_str         TYPE string.
+DATA: lv_filerow     TYPE string.
+DATA: lv_counter     TYPE i VALUE 0.
+DATA: lw_field_info  TYPE dfies.
+DATA: ls_comp_detail TYPE ty_comp_detail.
+DATA: lt_comp_detail TYPE TABLE OF ty_comp_detail.
+
+TYPES: BEGIN OF ty_tree,
+         level     TYPE salv_de_node_key,
+         parent    TYPE salv_de_node_key,
+         name      TYPE string,
+         type      TYPE string,
+         type_name TYPE string,
+         clear     TYPE abap_bool,
+       END OF ty_tree.
+DATA lt_tree TYPE STANDARD TABLE OF ty_tree.
+
+CLASS lcl_tree DEFINITION.
+  PUBLIC SECTION.
+    METHODS build_tree.
+
+  PRIVATE SECTION.
+    DATA gv_level TYPE salv_de_node_key VALUE 0.
+    METHODS get_components
+      IMPORTING
+        iv_data_type TYPE abap_abstypename
+*        iv_level     TYPE salv_de_node_key
+        iv_parent    TYPE salv_de_node_key.
+
+    METHODS get_next
+      RETURNING
+        VALUE(rv_level) TYPE salv_de_node_key.
+ENDCLASS.
+
+CLASS lcl_tree IMPLEMENTATION.
+  METHOD build_tree.
+* Components of the root structure of the table MDG_BS_BP_T_EXTERN
+    DATA ls_root_s TYPE mdg_bs_bp_s_extern.
+    DATA lr_root_s TYPE REF TO data.
+    DATA lr_root_stru TYPE REF TO cl_abap_structdescr.
+    DATA lv_next TYPE salv_de_node_key.
+
+    lr_root_stru ?= cl_abap_typedescr=>describe_by_name( p_table ).
+    DATA(lt_root_components) = lr_root_stru->components.
+    LOOP AT lt_root_components INTO DATA(lv_root_comp).
+
+      APPEND INITIAL LINE TO lt_tree ASSIGNING FIELD-SYMBOL(<ls_tree>).
+      <ls_tree>-level = get_next( ).
+      <ls_tree>-parent = 0.
+      <ls_tree>-name = lv_root_comp-name.
+      <ls_tree>-type = 'S'.
+
+      FIELD-SYMBOLS <ls_column> TYPE any.
+      ASSIGN COMPONENT lv_root_comp-name OF STRUCTURE ls_root_s TO <ls_column>.
+      DATA(lr_elem) = cl_abap_typedescr=>describe_by_data( <ls_column> ).
+
+      <ls_tree>-type_name = lr_elem->absolute_name.
+
+      get_components( EXPORTING iv_data_type = lr_elem->absolute_name
+*                                iv_level =
+                                iv_parent = <ls_tree>-level ).
+      EXIT.
+    ENDLOOP.
+
+  ENDMETHOD.
+
+  METHOD get_next.
+*    statics sv_level type salv_de_node_key VALUE 1.
+    ADD 1 TO gv_level.
+    rv_level = gv_level.
+  ENDMETHOD.
+
+  METHOD get_components.
+    DATA lr_data TYPE REF TO data.
+    FIELD-SYMBOLS <comp> TYPE any.
+
+    DATA ls_type_def TYPE REF TO cl_abap_typedescr.
+    ls_type_def = cl_abap_typedescr=>describe_by_name( iv_data_type ).
+
+    DATA lv_new_level TYPE salv_de_node_key.
+    DATA lr_type_def TYPE REF TO cl_abap_typedescr.
+    DATA ls_stru_def TYPE REF TO cl_abap_structdescr.
+    DATA lt_stru_components TYPE abap_compdescr_tab.
+    DATA lv_stru_comp TYPE abap_compdescr.
+    FIELD-SYMBOLS <ls_tree> TYPE ty_tree.
+    FIELD-SYMBOLS <ls_column> TYPE any.
+
+
+    CASE ls_type_def->kind.
+      WHEN cl_abap_typedescr=>kind_struct.
+
+* Get components of the structure
+        ls_stru_def ?= cl_abap_typedescr=>describe_by_name( iv_data_type ).
+        lt_stru_components  = ls_stru_def->components.
+
+* Create an instance of structure xxx
+        CREATE DATA lr_data TYPE (iv_data_type).
+        ASSIGN lr_data->* TO <comp>.
+
+        LOOP AT lt_stru_components INTO lv_stru_comp.
+          APPEND INITIAL LINE TO lt_tree ASSIGNING <ls_tree>.
+          <ls_tree>-level = get_next( ).
+          <ls_tree>-parent = iv_parent.
+          <ls_tree>-name = lv_stru_comp-name.
+
+          ASSIGN COMPONENT lv_stru_comp-name OF STRUCTURE <comp> TO <ls_column>.
+          lr_type_def = cl_abap_typedescr=>describe_by_data( <ls_column> ).
+          <ls_tree>-type = lr_type_def->kind.
+          <ls_tree>-type_name = lr_type_def->absolute_name.
+
+          get_components( EXPORTING iv_data_type = lr_type_def->absolute_name
+*                                    iv_level = '0'
+                                    iv_parent = <ls_tree>-level ).
+
+        ENDLOOP.
+
+      WHEN cl_abap_typedescr=>kind_table.
+
+* Get table component
+        lr_type_def  = cl_abap_tabledescr=>describe_by_name( iv_data_type ).
+        lo_table_def ?= lr_type_def.
+
+* Get components of the structure
+        lo_data_def = lo_table_def->get_table_line_type( ).
+        ls_stru_def ?= lo_data_def.
+        lt_stru_components = ls_stru_def->components.
+
+* Create an instance of structure xxx
+        CREATE DATA lr_data TYPE (lo_data_def->absolute_name).
+        ASSIGN lr_data->* TO <comp>.
+
+        LOOP AT lt_stru_components INTO lv_stru_comp.
+          APPEND INITIAL LINE TO lt_tree ASSIGNING <ls_tree>.
+          <ls_tree>-level = get_next( ).
+          <ls_tree>-parent = iv_parent.
+          <ls_tree>-name = lv_stru_comp-name.
+
+          ASSIGN COMPONENT lv_stru_comp-name OF STRUCTURE <comp> TO <ls_column>.
+          DATA(lr_elem) = cl_abap_typedescr=>describe_by_data( <ls_column> ).
+          <ls_tree>-type = lr_elem->kind.
+          <ls_tree>-type_name = lr_elem->absolute_name.
+
+          get_components( EXPORTING iv_data_type = lr_elem->absolute_name
+*                                    iv_level = '0'
+                                    iv_parent = <ls_tree>-level ).
+
+        ENDLOOP.
+      WHEN OTHERS.
+    ENDCASE.
+
+  ENDMETHOD.
+
+ENDCLASS.
+
+START-OF-SELECTION.
+
+  DATA(lv_main) = NEW lcl_tree( ).
+  lv_main->build_tree( ).
+
+  PERFORM show_tree.
+
+
+
+
+
+
+FORM show_tree.
+
+  DATA go_alv_tree     TYPE REF TO cl_salv_tree.
+  DATA gt_empty_tab TYPE STANDARD TABLE OF ty_tree.
+  DATA prev TYPE ty_tree.
+  DATA lo_nodes  TYPE REF TO cl_salv_nodes.
+  DATA lo_node   TYPE REF TO cl_salv_node.
+  DATA lv_expand_icon TYPE salv_de_tree_image.
+  DATA lv_collapse_icon TYPE salv_de_tree_image.
+  DATA lv_hier_icon    TYPE salv_de_tree_image.
+  DATA lo_settings TYPE REF TO cl_salv_tree_settings.
+  DATA lo_item     TYPE REF TO cl_salv_item.
+
+* Empty tree first
+  TRY.
+      cl_salv_tree=>factory(
+        IMPORTING
+          r_salv_tree = go_alv_tree
+        CHANGING
+          t_table     = gt_empty_tab ).
+    CATCH cx_salv_error.
+      MESSAGE 'Ошибка при создании объекта ALV' TYPE 'E'.
+  ENDTRY.
+
+  lv_expand_icon = icon_expand.
+  lv_collapse_icon = icon_collapse.
+  lv_hier_icon = icon_tree.
+
+  lo_settings = go_alv_tree->get_tree_settings( ).
+  lo_settings->set_hierarchy_header( 'Иерархия' ).
+  lo_settings->set_hierarchy_size( 30 ).
+  lo_settings->set_hierarchy_icon( lv_hier_icon ).
+
+
+*    go_alv_tree->set_screen_status(
+*      pfstatus      =  'SALV_STANDARD'
+*      REPORT        =  sy-repid " Скопировали к себе в программу статус
+*      set_functions =  go_alv_tree->c_functions_all ).
+
+  lo_nodes = go_alv_tree->get_nodes( ).
+
+
+  LOOP AT lt_tree ASSIGNING FIELD-SYMBOL(<fs_line>).
+
+    IF <fs_line>-parent = 0.
+      TRY.
+          lo_node = lo_nodes->add_node(
+                                related_node   = ''
+                                relationship   = cl_gui_column_tree=>relat_last_child
+                                data_row       = <fs_line>
+*                                collapsed_icon = lv_expand_icon
+*                                expanded_icon  = lv_collapse_icon
+                                row_style      = if_salv_c_tree_style=>emphasized_a
+                                text           = CONV lvc_value( <fs_line>-name ) ).
+        CATCH cx_salv_msg.
+      ENDTRY.
+    ELSE.
+      TRY.
+          lo_node = lo_nodes->add_node(
+                                related_node   = <fs_line>-parent
+                                relationship   = cl_gui_column_tree=>relat_last_child
+                                data_row       = <fs_line>
+*                                collapsed_icon = lv_expand_icon
+*                                expanded_icon  = lv_collapse_icon
+                                row_style      = if_salv_c_tree_style=>emphasized_a
+                                text           = CONV lvc_value( <fs_line>-name ) ).
+
+        CATCH cx_salv_msg.
+      ENDTRY.
+    ENDIF.
+
+    TRY .
+        lo_item = lo_node->get_item( 'CLEAR' ).
+        lo_item->set_type( if_salv_c_item_type=>checkbox ).
+        lo_item->set_editable( abap_true ).
+      CATCH cx_salv_msg.
+
+    ENDTRY.
+
+
+  ENDLOOP.
+
+  DATA:
+    lo_columns TYPE REF TO cl_salv_columns_tree,
+    lo_column  TYPE REF TO cl_salv_column_tree.
+
+  TRY.
+      lo_columns = go_alv_tree->get_columns( ).
+      lo_columns->set_optimize( abap_true ).
+      lo_column ?= lo_columns->get_column( 'LEVEL' ).
+      lo_column->set_technical( abap_true ).
+      lo_column ?= lo_columns->get_column( 'PARENT' ).
+      lo_column->set_technical( abap_true ).
+    CATCH cx_salv_msg cx_salv_not_found.
+  ENDTRY.
+
+  go_alv_tree->display( ).
+
+ENDFORM.
